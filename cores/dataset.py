@@ -62,7 +62,8 @@ class CoCoTfRecord(object):
 
     def get_coco_cats(self, supcats):
         coco = self._load_coco_set('train')
-        cats = coco.getCatIds(supNms=supcats)
+        cat_ids = coco.getCatIds(supNms=supcats)
+        cats = coco.loadCats(cat_ids)
         cat_nms = [cat['name'] for cat in cats]
         return cat_nms
 

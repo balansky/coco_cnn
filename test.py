@@ -70,16 +70,24 @@ def serialize_images(images):
 
 
 def test_batch():
+    batch_size = 8
     coco_tfrecord = dataset.CoCoTfRecord(tf, '/home/andy/Data/coco')
+    cats = coco_tfrecord.get_coco_cats('food')
     with tf.Session() as sess:
-        batch_images, batch_labels = coco_tfrecord.batch_data('train', 4)
-        sess.run([tf.global_variables_initializer(), tf.local_variables_initializer()])
+        batch_images, batch_labels = coco_tfrecord.batch_data('train', batch_size)
+        idx_table = tf.contrib.lookup.index_table_from_tensor(
+                    mapping=cats, num_oov_buckets=1, default_value=-1)
+        sess.run([tf.global_variables_initializer(), tf.local_variables_initializer(), tf.tables_initializer()])
         coord = tf.train.Coordinator()
         threads = tf.train.start_queue_runners(sess=sess, coord=coord)
-        rel_training_batch, rel_training_label = sess.run([batch_images, batch_labels])
-        print(rel_training_batch)
-    coord.request_stop()
-    coord.join(threads)
+        labels_idx = idx_table.lookup(batch_labels)
+        labels = tf.cast(tf.sparse_to_indicator(labels_idx, 10), tf.float32)
+        # label_tensor[labels_idx] = 1.0
+        # rel_training_batch, rel_training_label = sess.run([batch_images, batch_labels])
+        # str_training_label = tf.constant([label.decode('utf-8') for label in rel_training_label.values])
+        print(sess.run(labels))
+        coord.request_stop()
+        coord.join(threads)
 
 def main():
     test_batch()
