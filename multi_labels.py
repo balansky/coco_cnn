@@ -29,12 +29,11 @@ def train():
         global_step = tf.Variable(0, trainable=False)
         logits, end_points = nets.inception.inception_v3(inputs, num_classes=total_cats)
         sigmoids = tf.nn.sigmoid(logits, name='sigmoid_result')
-        cross_entropy = tf.nn.sigmoid_cross_entropy_with_logits(logits=logits, labels=targets)
-        correct_prediction = tf.equal(tf.round(sigmoids), targets)
+        cross_entropy = tf.reduce_mean(tf.nn.sigmoid_cross_entropy_with_logits(logits=logits, labels=targets))
+        correct_prediction = tf.reduce_mean(tf.equal(tf.round(sigmoids), targets))
         lr = tf.train.exponential_decay(0.01, global_step, 3000, 0.96, staircase=True)
         train_step = tf.train.AdamOptimizer(lr).minimize(cross_entropy, global_step=global_step)
         sess.run(tf.global_variables_initializer())
-
         for step in range(10000):
             images, labels = coco_set.next_batch(batch_size)
             resized_images = [process_image(img) for img in images]
