@@ -6,6 +6,9 @@ from tensorflow.python.platform import gfile
 from PIL import Image
 from io import BytesIO
 import numpy as np
+# from tensorflow.contrib.slim.python.slim.nets import inception_v3 as inception
+# from tensorflow.contrib import slim
+from inception import inception_model
 
 def int64_feature(value):
   return tf.train.Feature(int64_list=tf.train.Int64List(value=[value]))
@@ -85,12 +88,153 @@ def test_batch():
         # label_tensor[labels_idx] = 1.0
         # rel_training_batch, rel_training_label = sess.run([batch_images, batch_labels])
         # str_training_label = tf.constant([label.decode('utf-8') for label in rel_training_label.values])
-        print(sess.run(labels))
+        lb, lbidx = sess.run([labels, labels_idx])
+        print(lb)
+        print(lbidx)
         coord.request_stop()
         coord.join(threads)
 
+def process_image(serialized_tf_example):
+
+    image = tf.decode_raw(serialized_tf_example, tf.uint8)
+    image = tf.reshape(image, [299, 299, 3])
+    image = tf.cast(image, tf.float32)
+    # feature_configs = {
+    #     'image_raw': tf.FixedLenFeature(shape=[], dtype=tf.string),
+    # }
+    # tf_exmple = tf.parse_example(serialized_tf_example, feature_configs)
+    # raw_image = tf_exmple['image_raw']
+    # image = tf.decode_raw(raw_image, tf.uint8)
+    #
+    # # image_shape = tf.stack([image_height, image_width, 3])
+    # image = tf.reshape(image, [299, 299, 3])
+    # image = tf.cast(image, tf.float32)
+    return image
+
+
+
+def export_incept3():
+    NUM_CLASSES = 1000
+    NUM_TOP_CLASSES = 5
+    checkpoint_dir = "/home/andy/Data/models/inception-v3"
+    # WORKING_DIR = os.path.dirname(os.path.realpath(__file__))
+    SYNSET_FILE = os.path.join(checkpoint_dir, 'imagenet_lsvrc_2015_synsets.txt')
+    METADATA_FILE = os.path.join(checkpoint_dir, 'imagenet_metadata.txt')
+
+    output_dir = "/home/andy/Data/models/servable"
+    model_version = "1"
+
+
+    # synsets = []
+    with open(SYNSET_FILE) as f:
+        synsets = f.read().splitlines()
+    # Create synset->metadata mapping
+    texts = {}
+    with open(METADATA_FILE) as f:
+        for line in f.read().splitlines():
+            parts = line.split('\t')
+            assert len(parts) == 2
+            texts[parts[0]] = parts[1]
+
+
+    with tf.Graph().as_default():
+        serialized_tf_example = tf.placeholder(tf.string, name='tf_example')
+        feature_configs = {
+            'image': tf.FixedLenFeature(shape=[], dtype=tf.string)
+        }
+        tf_examples = tf.parse_example(serialized_tf_example, feature_configs)
+        jpegs = tf_examples['image']
+        images = tf.map_fn(process_image, jpegs,  dtype=tf.float32)
+        # with slim.arg_scope(inception.inception_v3_arg_scope()):
+        logits, end_points = inception_model.inference(images, NUM_CLASSES + 1)
+        inception_embeddings = end_points['prelogits']
+        values, indices = tf.nn.top_k(logits, NUM_TOP_CLASSES)
+        class_descriptions = ['unused background']
+        for s in synsets:
+            class_descriptions.append(texts[s])
+        class_tensor = tf.constant(class_descriptions)
+
+        table = tf.contrib.lookup.index_to_string_table_from_tensor(class_tensor)
+        classes = table.lookup(tf.to_int64(indices))
+
+        # Restore variables from training checkpoint.
+        variable_averages = tf.train.ExponentialMovingAverage(0.9999)
+        variables_to_restore = variable_averages.variables_to_restore()
+        saver = tf.train.Saver(variables_to_restore)
+        with tf.Session() as sess:
+            # Restore variables from training checkpoints.
+            ckpt = tf.train.get_checkpoint_state(checkpoint_dir)
+            if ckpt and ckpt.model_checkpoint_path:
+                saver.restore(sess, ckpt.model_checkpoint_path)
+                # Assuming model_checkpoint_path looks something like:
+                #   /my-favorite-path/imagenet_train/model.ckpt-0,
+                # extract global_step from it.
+                global_step = ckpt.model_checkpoint_path.split('/')[-1].split('-')[-1]
+                print('Successfully loaded model from %s at step=%s.' % (ckpt.model_checkpoint_path, global_step))
+            else:
+                print('No checkpoint file found at %s') % checkpoint_dir
+                return
+
+            # Export inference model.
+            output_path = os.path.join(
+                tf.compat.as_bytes(output_dir),
+                tf.compat.as_bytes(str(model_version)))
+            print('Exporting trained model to', output_path)
+            builder = tf.saved_model.builder.SavedModelBuilder(output_path)
+            classify_inputs_tensor_info = tf.saved_model.utils.build_tensor_info(
+                serialized_tf_example)
+            classes_output_tensor_info = tf.saved_model.utils.build_tensor_info(
+                classes)
+            scores_output_tensor_info = tf.saved_model.utils.build_tensor_info(values)
+
+            classification_signature = (
+                tf.saved_model.signature_def_utils.build_signature_def(
+                    inputs={
+                        tf.saved_model.signature_constants.CLASSIFY_INPUTS:
+                            classify_inputs_tensor_info
+                    },
+                    outputs={
+                        tf.saved_model.signature_constants.CLASSIFY_OUTPUT_CLASSES:
+                            classes_output_tensor_info,
+                        tf.saved_model.signature_constants.CLASSIFY_OUTPUT_SCORES:
+                            scores_output_tensor_info
+                    },
+                    method_name=tf.saved_model.signature_constants.CLASSIFY_METHOD_NAME
+                ))
+            predict_inputs_tensor_info = tf.saved_model.utils.build_tensor_info(jpegs)
+            embedding_tensor_info = tf.saved_model.utils.build_tensor_info(inception_embeddings)
+            prediction_signature = (
+                tf.saved_model.signature_def_utils.build_signature_def(
+                    inputs={'images': predict_inputs_tensor_info},
+                    outputs={
+                        'classes': classes_output_tensor_info,
+                        'embedding': embedding_tensor_info
+                    },
+                    method_name=tf.saved_model.signature_constants.PREDICT_METHOD_NAME
+                ))
+            legacy_init_op = tf.group(
+                tf.tables_initializer(), name='legacy_init_op')
+            builder.add_meta_graph_and_variables(
+                sess, [tf.saved_model.tag_constants.SERVING],
+                signature_def_map={
+                    'predict_images':
+                        prediction_signature,
+                    tf.saved_model.signature_constants.
+                        DEFAULT_SERVING_SIGNATURE_DEF_KEY:
+                        classification_signature,
+                },
+                legacy_init_op=legacy_init_op)
+
+            builder.save()
+            print('Successfully exported model to %s' % output_dir)
+
+
+
+
+
 def main():
-    test_batch()
+    export_incept3()
+    # test_batch()
     # coco_tfrecord = dataset.CoCoTfRecord(tf, '/home/andy/Data/coco')
     # coco_tfrecord.write_to_tfrecords('food', 'train')
     # image_dir = os.path.join('/home/andy/Data/coco', 'train')

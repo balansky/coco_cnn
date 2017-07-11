@@ -47,7 +47,7 @@ class CoCoSet(object):
 
 class CoCoTfRecord(object):
 
-    def __init__(self, tf, data_dir):
+    def __init__(self, tf, data_dir=None):
         self.data_dir = data_dir
         self.tf = tf
 
@@ -106,7 +106,7 @@ class CoCoTfRecord(object):
         image = self.tf.reshape(image, image_shape)
         image = self.tf.cast(image, self.tf.float32)
 
-        image = self.tf.image.resize_image_with_crop_or_pad(image, max_side, max_side)
+        image = self.tf.image.resize_image_with_crop_or_pad(image, max_side, max_side, 299)
         image = self.tf.image.per_image_standardization(image)
         image = self.tf.expand_dims(image, 0)
         image = self.tf.image.resize_bicubic(
@@ -152,13 +152,17 @@ class CoCoTfRecord(object):
                 records.append(os.path.join(tfrecord_dir, record))
         return records
 
-
-    def batch_data(self, batch_type, batch_size, capacity=60, num_threads=8, min_after_dequeue=1000):
-        tfrecords = self._get_tfrecords(batch_type)
-        filename_queue = self.tf.train.string_input_producer(tfrecords, shuffle=True, capacity=capacity)
+    def input_fn(self, tfrecords, batch_size, num_epochs=1, capacity=60, num_threads=8, min_after_dequeue=1000):
+        filename_queue = self.tf.train.string_input_producer(tfrecords, num_epochs=num_epochs,
+                                                             shuffle=True, capacity=capacity)
         record_image, record_labels = self._read_and_decode(filename_queue)
         batch_images, batch_labels = self.tf.train.shuffle_batch([record_image, record_labels],
                                                                  num_threads=num_threads, batch_size=batch_size,
-                                                                 capacity=min_after_dequeue + 3*batch_size,
-                                                                 min_after_dequeue=min_after_dequeue,)
+                                                                 capacity=min_after_dequeue + 3 * batch_size,
+                                                                 min_after_dequeue=min_after_dequeue, )
         return batch_images, batch_labels
+
+
+    def batch_data(self, batch_type, batch_size, num_epochs=1, capacity=60, num_threads=8, min_after_dequeue=1000):
+        tfrecords = self._get_tfrecords(batch_type)
+        return self.input_fn(tfrecords, batch_size, num_epochs, capacity, num_threads, min_after_dequeue)
