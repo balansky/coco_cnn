@@ -41,7 +41,9 @@ def decode_and_resize(image_str_tensor):
         'image_height': tf.FixedLenFeature([], tf.int64),
         'image_width': tf.FixedLenFeature([], tf.int64)
     })
-    image = tf.decode_raw(features['image_raw'], tf.uint8)
+    image = tf.image.decode_jpeg(features['image_raw'], channels=3)
+    image = tf.image.convert_image_dtype(image, dtype=tf.float32)
+
     image_height = tf.cast(features['image_height'], tf.int32)
     image_width = tf.cast(features['image_width'], tf.int32)
     max_side = tf.reduce_max((image_height, image_width))
@@ -233,8 +235,8 @@ def export_incept3():
 
 
 def main():
-    export_incept3()
-    # test_batch()
+    # export_incept3()
+    test_batch()
     # coco_tfrecord = dataset.CoCoTfRecord(tf, '/home/andy/Data/coco')
     # coco_tfrecord.write_to_tfrecords('food', 'train')
     # image_dir = os.path.join('/home/andy/Data/coco', 'train')

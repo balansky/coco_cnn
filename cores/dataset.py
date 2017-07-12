@@ -1,6 +1,6 @@
 from pycocotools.coco import COCO
-import numpy as np
 from datetime import datetime
+import tensorflow as tf
 import cv2
 import os
 
@@ -44,6 +44,113 @@ class CoCoSet(object):
     #         picked_labels[i][labels] = 1.0
     #     return picked_imgs, picked_labels
 
+class TfRecord(object):
+
+    def _int64_feature(self, value):
+        if isinstance(value, list):
+            return tf.train.Feature(int64_list=tf.train.Int64List(value=value))
+        else:
+            return tf.train.Feature(int64_list=tf.train.Int64List(value=[value]))
+
+    def _bytes_feature(self, value):
+        if isinstance(value, list):
+            return tf.train.Feature(bytes_list=tf.train.BytesList(value=value))
+        else:
+            return tf.train.Feature(bytes_list=tf.train.BytesList(value=[value]))
+
+
+    def _write_image_tfrecord(self, image_files, tfrecord_path):
+        writer = tf.python_io.TFRecordWriter(tfrecord_path)
+        for image_file in image_files:
+            print("[%s]Convertint Image(%s) to Tfrecord..." %
+                  (datetime.now().strftime('%Y-%m-%d %H:%M:%S'), image_file['path']))
+            try:
+                img = cv2.imread(image_file['path'])
+                raw_img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+                categories = image_file['category']
+                example = tf.train.Example(features=tf.train.Features(feature={
+                    'image_raw': self._bytes_feature(raw_img.tostring()),
+                    'image_labels': self._bytes_feature([cat.encode('utf-8') for cat in categories]),
+                    'image_height': self._int64_feature(img['height']),
+                    'image_width': self._int64_feature(img['width'])
+                }))
+                writer.write(example.SerializeToString())
+            except Exception as err:
+                print("Error Occur : " + str(err))
+        writer.close()
+
+    def read_image_tfrecord(self, filename_queue):
+        reader = tf.TFRecordReader()
+        _, serialized_example = reader.read(filename_queue)
+        features = tf.parse_single_example(
+            serialized_example,
+            features={
+            "image_raw" : tf.FixedLenFeature([], tf.string),
+            "image_height" : tf.FixedLenFeature([], tf.int64),
+            "image_width" : tf.FixedLenFeature([], tf.int64),
+            "image_labels": tf.VarLenFeature(tf.string),
+            })
+        return features
+
+
+class CocoTfRecord(TfRecord):
+
+    def _coco_images(self, coco, sup_cat):
+        cat_ids = coco.getCatIds(supNms=sup_cat)
+        cats = coco.loadCats(cat_ids)
+        catid_to_label = {cat['id']: cat['name'] for cat in cats}
+        coco_images = coco.loadImgs(coco.getImgIds(catIds=cat_ids))
+        for image in coco_images:
+            img_anns = coco.imgToAnns[image['id']]
+            categories = list(set([catid_to_label[ann['category_id']] for ann in img_anns
+                                   if ann['category_id'] in cat_ids]))
+            yield image['file_name'], categories
+
+    def _image_file(self, image_dir, image_name, categories):
+        return {'path': os.path.join(image_dir, image_name), 'category': categories}
+
+    def load_sup_cats(self, coco):
+        cats = coco.loadCats(coco.getCatIds())
+        sup_cats = set([cat['supercategory'] for cat in cats])
+        return sup_cats
+
+    def load_coco(self, coco_dir, image_type):
+        annotation_file = os.path.join(coco_dir, 'annotations', 'instances_%s2014.json' % image_type)
+        coco = COCO(annotation_file)
+        return coco
+
+
+    def convert_to_tfrecord(self, coco_dir, tf_dir, image_type, sup_cats=None):
+        coco = self.load_coco(coco_dir, image_type)
+        image_dir = os.path.join(coco_dir, image_type)
+        if sup_cats and isinstance(sup_cats, list):
+            for cat in sup_cats:
+                image_files = [self._image_file(image_dir, file_name, categories) for file_name, categories
+                               in self._coco_images(coco, sup_cats)]
+                self._write_image_tfrecord(image_files, os.path.join(tf_dir, image_type, cat))
+        elif sup_cats and isinstance(sup_cats, str):
+            image_files = [self._image_file(image_dir, file_name, categories) for file_name, categories
+                           in self._coco_images(coco, sup_cats)]
+            self._write_image_tfrecord(image_files, os.path.join(tf_dir, image_type, sup_cats))
+        else:
+            sup_cats = self.load_sup_cats(coco)
+            for cat in sup_cats:
+                image_files = [self._image_file(image_dir, file_name, categories) for file_name, categories
+                               in self._coco_images(coco, cat)]
+                self._write_image_tfrecord(image_files, os.path.join(tf_dir, image_type, cat))
+
+
+    def get_tfrecords(self, tfrecord_dir, require_type):
+        records = []
+        for record in os.listdir(tfrecord_dir):
+            record_name, record_extension = record.split('.')
+            if record_extension != 'tfrecords': continue
+            record_type, record_cat = record_name.split('_')
+            if record_type == require_type:
+                records.append(os.path.join(tfrecord_dir, record))
+        return records
+
+
 
 class CoCoTfRecord(object):
 
@@ -52,7 +159,10 @@ class CoCoTfRecord(object):
         self.tf = tf
 
     def int64_feature(self, value):
-        return self.tf.train.Feature(int64_list=self.tf.train.Int64List(value=[value]))
+        if isinstance(value, list):
+            return self.tf.train.Feature(int64_list=self.tf.train.Int64List(value=value))
+        else:
+            return self.tf.train.Feature(int64_list=self.tf.train.Int64List(value=[value]))
 
     def bytes_feature(self, value):
         if isinstance(value, list):
@@ -79,7 +189,7 @@ class CoCoTfRecord(object):
         imgs = coco.loadImgs(coco.getImgIds(catIds=cat_ids))
         writer = self.tf.python_io.TFRecordWriter(
             os.path.join(self.data_dir, 'tfrecords', image_type + "_" + sup_cat + ".tfrecords"))
-        for img in imgs[:20]:
+        for img in imgs:
             print("[%s]Convertint Image(%s) to Tfrecord..." %
                   (datetime.now().strftime('%Y-%m-%d %H:%M:%S'), img['file_name']))
             try:

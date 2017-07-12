@@ -10,11 +10,11 @@ import argparse
 def run(target, is_chief, num_classes, train_steps, eval_steps, job_dir, train_files, eval_files,
         train_batch_size, eval_batch_size, learning_rate, eval_frequency, scale_factor, num_epochs):
     coco_date = dataset.CoCoTfRecord(tf)
-    hooks = []
-    if is_chief:
-        with tf.Graph().as_default() as evaluation_graph:
-            images, labels = coco_date.input_fn(eval_files, eval_batch_size, eval_steps)
-            logits, end_points = inception_model.inference(images, num_classes)
+    hooks = [tf.train.StopAtStepHook(last_step=1000000)]
+    # if is_chief:
+    #     with tf.Graph().as_default() as evaluation_graph:
+    #         images, labels = coco_date.input_fn(eval_files, eval_batch_size, eval_steps)
+    #         logits, end_points = inception_model.inference(images, num_classes)
 
     with tf.Graph().as_default():
         with tf.device(tf.train.replica_device_setter()):
@@ -111,8 +111,7 @@ if __name__=="__main__":
                         type=float,
                         default=0.25,
                         help="""\
-                        Rate of decay size of layer for Deep Neural Net.
-                        max(2, int(first_layer_size * scale_factor**i)) \
+                        Rate of decay size of layer for Deep Neural Net. \
                         """)
     parser.add_argument('--num-epochs',
                         type=int,
