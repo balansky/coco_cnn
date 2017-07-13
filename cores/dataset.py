@@ -6,43 +6,41 @@ import os
 
 class CoCoSet(object):
 
-    def __init__(self, coco_root, image_cats=[]):
+    def __init__(self, coco_root, coco_type):
         self.data_root = coco_root
-        self.train_imgs, self.cats = self._load_imgs(image_cats, image_type='train')
-        self.val_imgs, _ = self._load_imgs(image_cats, image_type='val')
+        self.coco_type = coco_type
+        self.coco = self._load_coco(coco_root, coco_type)
 
-
-    def _load_imgs(self, image_cats, image_type='train'):
-        annotation_file = os.path.join(self.data_root, 'annotations', 'instances_%s2014.json' % image_type)
+    def _load_coco(self, coco_dir, image_type):
+        annotation_file = os.path.join(coco_dir, 'annotations', 'instances_%s2014.json' % image_type)
         coco = COCO(annotation_file)
-        cat_ids = coco.getCatIds(supNms=image_cats)
-        cats = coco.loadCats(cat_ids)
-        if cat_ids:
-            imgs = coco.loadImgs(coco.getImgIds(catIds=cat_ids))
-        else:
-            imgs = []
-        for img in imgs:
-            img_anns = coco.imgToAnns[img['id']]
-            img['categories'] = list(set([ann['category'] for ann in img_anns if ann['category_id'] in cat_ids]))
-        return imgs, cats
+        return coco
 
-    def get_image_set(self, data_type):
-        return self.train_imgs if data_type == 'train' else self.val_imgs
+    def coco_images(self, sup_cat):
+        images = []
+        cat_ids = self.coco.getCatIds(supNms=sup_cat)
+        cats = self.coco.loadCats(cat_ids)
+        catid_to_label = {cat['id']: cat['name'] for cat in cats}
+        coco_images = self.coco.loadImgs(self.coco.getImgIds(catIds=cat_ids))
+        for image in coco_images:
+            img_anns = self.coco.imgToAnns[image['id']]
+            categories = list(set([catid_to_label[ann['category_id']] for ann in img_anns
+                                   if ann['category_id'] in cat_ids]))
+            images.append({'path': os.path.join(self.data_root, self.coco_type, image['file_name']),
+                           'category': categories})
+        return coco_images
 
-    #
-    # def next_batch(self, batch_size, batch_type='train'):
-    #     image_set = self.train_imgs if batch_type == 'train' else self.val_imgs
-    #     label_set = self.train_to_cats if batch_type == 'train' else self.val_to_cats
-    #     # image_set = self.train_imgs
-    #     # label_set = self.train_to_cats
-    #     random_idx = np.random.choice(len(image_set), batch_size)
-    #     picked_imgs = [image_set[idx] for idx in random_idx]
-    #     picked_labels = np.zeros((batch_size, len(self.cats)), np.float32)
-    #     for i, img in enumerate(picked_imgs):
-    #         img['file_name'] = os.path.join(self.data_root, batch_type, img['file_name'])
-    #         labels = [self.cat_to_label[cat] for cat in label_set[img['id']]]
-    #         picked_labels[i][labels] = 1.0
-    #     return picked_imgs, picked_labels
+    def coco_sup_cats(self, coco):
+        cats = coco.loadCats(coco.getCatIds())
+        sup_cats = set([cat['supercategory'] for cat in cats])
+        return sup_cats
+
+    def get_coco_cats(self, supcats):
+        cat_ids = self.coco.getCatIds(supNms=supcats)
+        cats = self.coco.loadCats(cat_ids)
+        cat_nms = [cat['name'] for cat in cats]
+        return cat_nms
+
 
 class TfRecord(object):
 
@@ -58,8 +56,7 @@ class TfRecord(object):
         else:
             return tf.train.Feature(bytes_list=tf.train.BytesList(value=[value]))
 
-
-    def _write_image_tfrecord(self, image_files, tfrecord_path):
+    def write_image_tfrecord(self, image_files, tfrecord_path):
         writer = tf.python_io.TFRecordWriter(tfrecord_path)
         for image_file in image_files:
             print("[%s]Convertint Image(%s) to Tfrecord..." %
@@ -70,9 +67,9 @@ class TfRecord(object):
                 categories = image_file['category']
                 example = tf.train.Example(features=tf.train.Features(feature={
                     'image_raw': self._bytes_feature(raw_img.tostring()),
-                    'image_labels': self._bytes_feature([cat.encode('utf-8') for cat in categories]),
                     'image_height': self._int64_feature(img['height']),
-                    'image_width': self._int64_feature(img['width'])
+                    'image_width': self._int64_feature(img['width']),
+                    'image_labels': self._bytes_feature([cat.encode('utf-8') for cat in categories]),
                 }))
                 writer.write(example.SerializeToString())
             except Exception as err:
@@ -119,7 +116,6 @@ class CocoTfRecord(TfRecord):
         coco = COCO(annotation_file)
         return coco
 
-
     def convert_to_tfrecord(self, coco_dir, tf_dir, image_type, sup_cats=None):
         coco = self.load_coco(coco_dir, image_type)
         image_dir = os.path.join(coco_dir, image_type)
@@ -127,18 +123,17 @@ class CocoTfRecord(TfRecord):
             for cat in sup_cats:
                 image_files = [self._image_file(image_dir, file_name, categories) for file_name, categories
                                in self._coco_images(coco, sup_cats)]
-                self._write_image_tfrecord(image_files, os.path.join(tf_dir, image_type, cat))
+                self.write_image_tfrecord(image_files, os.path.join(tf_dir, image_type, cat))
         elif sup_cats and isinstance(sup_cats, str):
             image_files = [self._image_file(image_dir, file_name, categories) for file_name, categories
                            in self._coco_images(coco, sup_cats)]
-            self._write_image_tfrecord(image_files, os.path.join(tf_dir, image_type, sup_cats))
+            self.write_image_tfrecord(image_files, os.path.join(tf_dir, image_type, sup_cats))
         else:
             sup_cats = self.load_sup_cats(coco)
             for cat in sup_cats:
                 image_files = [self._image_file(image_dir, file_name, categories) for file_name, categories
                                in self._coco_images(coco, cat)]
-                self._write_image_tfrecord(image_files, os.path.join(tf_dir, image_type, cat))
-
+                self.write_image_tfrecord(image_files, os.path.join(tf_dir, image_type, cat))
 
     def get_tfrecords(self, tfrecord_dir, require_type):
         records = []
