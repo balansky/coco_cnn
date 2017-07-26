@@ -54,13 +54,8 @@ class InceptionMultiLabels(object):
         if mode in (PREDICT, EVAL):
             pass
 
-
     def inference(self, sigmoids):
         return tf.round(sigmoids)
-
-
-
-
 
     def eval(self, sigmoids, labels):
         correct_prediction = tf.reduce_mean(tf.equal(tf.round(sigmoids), labels))
