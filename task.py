@@ -1,63 +1,152 @@
-from cores import dataset, model
-from inception import inception_model
+from cores import model
 import tensorflow as tf
 import os
 import json
 import argparse
 from tensorflow.python.saved_model import signature_constants as sig_constants
-from utils import tfrecord
-from tensorflow.python.ops import control_flow_ops
+import threading
 
 
-def preprocess_image(raw_image):
-    image = tf.image.decode_jpeg(raw_image, channels=3)
-    image = tf.image.convert_image_dtype(image, dtype=tf.float32)
-    max_side = tf.reduce_max(tf.shape(image))
-    target_size = tf.constant(299)
-    target_smaller_than_max = tf.less_equal(target_size, max_side)
-    resize_size = control_flow_ops.cond(target_smaller_than_max, lambda: max_side, lambda: target_size)
-    image = tf.image.resize_image_with_crop_or_pad(image, resize_size, resize_size)
-    image = tf.image.per_image_standardization(image)
-    image = tf.expand_dims(image, 0)
-    image = tf.image.resize_bicubic(
-        image, [target_size, target_size], align_corners=False)
+class EvaluationRunHook(tf.train.SessionRunHook):
+    """EvaluationRunHook performs continuous evaluation of the model.
+    Args:
+      checkpoint_dir (string): Dir to store model checkpoints
+      metric_dir (string): Dir to store metrics like accuracy and auroc
+      graph (tf.Graph): Evaluation graph
+      eval_frequency (int): Frequency of evaluation every n train steps
+      eval_steps (int): Evaluation steps to be performed
+    """
+    def __init__(self,
+                 trainer,
+                 checkpoint_dir,
+                 eval_batch_size,
+                 eval_frequency,
+                 eval_steps=None,
+                 **kwargs):
 
-    image = tf.squeeze(image, squeeze_dims=[0])
-    return image
+        self._eval_steps = eval_steps
+        self._checkpoint_dir = checkpoint_dir
+        self._kwargs = kwargs
+        self._eval_every = eval_frequency
+        self._latest_checkpoint = None
+        self._checkpoints_since_eval = 0
 
-def batch_inputs(tf_example, batch_size, classes, num_threads=8, min_after_dequeue=1000):
+        # With the graph object as default graph
+        # See https://www.tensorflow.org/api_docs/python/tf/Graph#as_default
+        # Adds ops to the graph object
+        evaluation_graph = tf.Graph()
+        with evaluation_graph.as_default():
+            eval_inputs, eval_labels = trainer.input_fn('val', eval_batch_size, None)
+            cross_entropy, correct_prediction = trainer.eval_fn(eval_inputs, eval_labels)
 
-    idx_table = tf.contrib.lookup.index_table_from_tensor(mapping=classes, num_oov_buckets=1, default_value=-1)
+            # Op that creates a Summary protocol buffer by merging summaries
+            self._summary_op = tf.summary.merge_all()
 
-    tf_image = preprocess_image(tf_example['image_raw'])
-    tf_labels = tf.cast(tf_example['image_labels'], tf.string)
-    batch_images, batch_labels = tf.train.shuffle_batch([tf_image, tf_labels], num_threads=num_threads,
-                                                        batch_size=batch_size,
-                                                        capacity=min_after_dequeue + 3 * batch_size,
-                                                        min_after_dequeue=min_after_dequeue)
-    labels_idx = idx_table.lookup(batch_labels)
-    labels = tf.cast(tf.sparse_to_indicator(labels_idx, len(classes)), tf.float32)
-    return batch_images, labels
+            # Saver class add ops to save and restore
+            # variables to and from checkpoint
+            self._saver = tf.train.Saver()
+
+            # Creates a global step to contain a counter for
+            # the global training step
+            self._gs = tf.contrib.framework.get_or_create_global_step()
+
+            self._loss_ops = cross_entropy
+            self._eval_ops = correct_prediction
+
+        # MonitoredTrainingSession runs hooks in background threads
+        # and it doesn't wait for the thread from the last session.run()
+        # call to terminate to invoke the next hook, hence locks.
+        self._graph = evaluation_graph
+        self._eval_lock = threading.Lock()
+        self._checkpoint_lock = threading.Lock()
+        self._file_writer = tf.summary.FileWriter(
+            os.path.join(checkpoint_dir, 'eval'), graph=evaluation_graph)
+
+    def after_run(self, run_context, run_values):
+        # Always check for new checkpoints in case a single evaluation
+        # takes longer than checkpoint frequency and _eval_every is >1
+        self._update_latest_checkpoint()
+
+        if self._eval_lock.acquire(False):
+            try:
+                if self._checkpoints_since_eval > self._eval_every:
+                    self._checkpoints_since_eval = 0
+                    self._run_eval()
+            finally:
+                self._eval_lock.release()
+
+    def _update_latest_checkpoint(self):
+        """Update the latest checkpoint file created in the output dir."""
+        if self._checkpoint_lock.acquire(False):
+            try:
+                latest = tf.train.latest_checkpoint(self._checkpoint_dir)
+                if not latest == self._latest_checkpoint:
+                    self._checkpoints_since_eval += 1
+                    self._latest_checkpoint = latest
+            finally:
+                self._checkpoint_lock.release()
+
+    def end(self, session):
+        """Called at then end of session to make sure we always evaluate."""
+        self._update_latest_checkpoint()
+
+        with self._eval_lock:
+            self._run_eval()
+
+    def _run_eval(self):
+        """Run model evaluation and generate summaries."""
+        coord = tf.train.Coordinator(clean_stop_exception_types=(
+            tf.errors.CancelledError, tf.errors.OutOfRangeError))
+
+        with tf.Session(graph=self._graph) as session:
+            # Restores previously saved variables from latest checkpoint
+            self._saver.restore(session, self._latest_checkpoint)
+
+            session.run([
+                tf.tables_initializer(),
+                tf.local_variables_initializer()
+            ])
+            tf.train.start_queue_runners(coord=coord, sess=session)
+            train_step = session.run(self._gs)
+
+            tf.logging.info('Starting Evaluation For Step: {}'.format(train_step))
+            eval_loss = 0
+            eval_acc = 0
+            with coord.stop_on_exception():
+                eval_step = 0
+                while not coord.should_stop() and (self._eval_steps is None or
+                                                           eval_step < self._eval_steps):
+                    summaries, eval_loss, eval_accuracy = session.run(
+                        [self._summary_op, self._loss_ops, self._eval_ops])
+                    if eval_step % 100 == 0:
+                        tf.logging.info("On Evaluation Step: {}".format(eval_step))
+                    eval_step += 1
+                    eval_loss += eval_loss
+                    eval_acc += eval_acc
+            tf.logging.info("Average Loss : %s" % str(eval_loss/eval_step))
+            tf.logging.info("Average Accuracy : %s" % str(eval_acc/eval_step))
+            # Write the summaries
+            self._file_writer.add_summary(summaries, global_step=train_step)
+            self._file_writer.flush()
+            tf.logging.info(eval_accuracy)
 
 
-def run(target, cluster_spec, is_chief, train_steps, eval_steps, job_dir, data_dir, sup_cats, num_threads,
-        train_batch_size, eval_batch_size, learning_rate, eval_frequency, scale_factor, num_epochs):
-    tf_record = tfrecord.TfRecord(data_dir)
-    cats = tf_record.get_tf_categories(sup_cats)
-    hooks = [tf.train.StopAtStepHook(last_step=1000000)]
-    # if is_chief:
-    #     with tf.Graph().as_default() as evaluation_graph:
-    #         images, labels = coco_date.input_fn(eval_files, eval_batch_size, eval_steps)
-    #         logits, end_points = inception_model.inference(images, num_classes)
+
+def run(target, cluster_spec, is_chief, job_dir, data_dir, sup_cats,
+        train_steps, train_batch_size, eval_steps,eval_batch_size, eval_frequency,
+        learning_rate, decay_frequency, decay_rate, num_epochs, num_threads):
+
+    trainer = model.MultiLabelTrainer(data_dir, sup_cats)
+    if is_chief:
+        hooks = [EvaluationRunHook(trainer, job_dir, eval_batch_size, eval_frequency, eval_steps=eval_steps,
+        )]
+    else:
+        hooks = []
     with tf.Graph().as_default():
         with tf.device(tf.train.replica_device_setter(cluster=cluster_spec)):
-            tf_example = tf_record.decode_tfrecords('train', sup_cats, num_epochs)
-            batch_images, batch_labels = batch_inputs(tf_example, train_batch_size, cats, num_threads)
-            logits, end_points = inception_model.inference(batch_images, len(cats), for_training=True)
-            global_step = tf.contrib.framework.get_or_create_global_step()
-            cross_entropy = tf.nn.sigmoid_cross_entropy_with_logits(logits=logits, labels=batch_labels)
-            lr = tf.train.exponential_decay(learning_rate, global_step, 3000, scale_factor, staircase=True)
-            train_op = tf.train.AdamOptimizer(lr).minimize(cross_entropy, global_step=global_step)
+            batch_inputs, batch_labels = trainer.input_fn('train', train_batch_size, num_epochs, num_threads)
+            train_op, global_step = trainer.train_fn(batch_inputs, batch_labels, learning_rate, decay_frequency,
+                                                     decay_rate)
         with tf.train.MonitoredTrainingSession(master=target, is_chief=is_chief, checkpoint_dir=job_dir,
                                                hooks=hooks, save_checkpoint_secs=20,
                                                save_summaries_steps=50) as session:
@@ -65,49 +154,30 @@ def run(target, cluster_spec, is_chief, train_steps, eval_steps, job_dir, data_d
             while (train_steps is None or
                            step < train_steps) and not session.should_stop():
                 step, _ = session.run([global_step, train_op])
-            # latest_checkpoint = tf.train.latest_checkpoint(job_dir)
-            # if is_chief:
-            #     build_and_run_exports(latest_checkpoint,
-            #                           job_dir,
-            #                           model.SERVING_INPUT_FUNCTIONS[export_format],
-            #                           hidden_units)
+            latest_checkpoint = tf.train.latest_checkpoint(job_dir)
+            if is_chief:
+                build_and_run_exports(trainer, latest_checkpoint, job_dir)
 
 
-def build_and_run_exports(latest, job_dir, serving_input_fn, hidden_units):
-    """Given the latest checkpoint file export the saved model.
-    Args:
-    latest (string): Latest checkpoint file
-    job_dir (string): Location of checkpoints and model files
-    name (string): Name of the checkpoint to be exported. Used in building the
-      export path.
-    hidden_units (list): Number of hidden units
-    learning_rate (float): Learning rate for the SGD
-    """
-
+def build_and_run_exports(trainer, latest, job_dir):
     prediction_graph = tf.Graph()
-    exporter = tf.saved_model.builder.SavedModelBuilder(os.path.join(job_dir, 'export'))
+    export_dir = os.path.join(job_dir, 'export')
+    exporter = tf.saved_model.builder.SavedModelBuilder(export_dir)
     with prediction_graph.as_default():
-        features, inputs_dict = serving_input_fn()
-        prediction_dict = model.model_fn(
-            model.PREDICT,
-            features,
-            None,  # labels
-            hidden_units=hidden_units,
-            learning_rate=None  # learning_rate unused in prediction mode
-        )
+        incoming_data = tf.placeholder(tf.string, name='incoming_data')
+        top_classes, class_values, _ = trainer.inference(incoming_data)
         saver = tf.train.Saver()
-
-        inputs_info = {
-            name: tf.saved_model.utils.build_tensor_info(tensor)
-            for name, tensor in inputs_dict.iteritems()
-        }
-        output_info = {
-            name: tf.saved_model.utils.build_tensor_info(tensor)
-            for name, tensor in prediction_dict.iteritems()
-        }
+        predict_inputs_tensor_info = tf.saved_model.utils.build_tensor_info(incoming_data)
+        classes_output_tensor_info = tf.saved_model.utils.build_tensor_info(top_classes)
+        scores_output_tensor_info = tf.saved_model.utils.build_tensor_info(class_values)
         signature_def = tf.saved_model.signature_def_utils.build_signature_def(
-            inputs=inputs_info,
-            outputs=output_info,
+            inputs={
+                'images': predict_inputs_tensor_info
+            },
+            outputs={
+                'classes': classes_output_tensor_info,
+                'scores': scores_output_tensor_info
+            },
             method_name=sig_constants.PREDICT_METHOD_NAME
         )
 
@@ -124,6 +194,7 @@ def build_and_run_exports(latest, job_dir, serving_input_fn, hidden_units):
         )
 
         exporter.save()
+    print('Successfully exported model to %s' % export_dir)
 
 
 def dispatch(*args, **kwargs):
@@ -193,14 +264,17 @@ if __name__ == "__main__":
                         default=0.003,
                         help='Learning rate for SGD')
     parser.add_argument('--eval-frequency',
-                        default=50,
+                        default=100,
                         help='Perform one evaluation per n steps')
-    parser.add_argument('--scale-factor',
+    parser.add_argument('--decay-rate',
                         type=float,
-                        default=0.25,
+                        default=0.96,
                         help="""\
                         Rate of decay size of layer for Deep Neural Net. \
                         """)
+    parser.add_argument('--decay-frequency',
+                        default=100,
+                        help='Perform decay per n steps')
     parser.add_argument('--num-epochs',
                         type=int,
                         default=None,

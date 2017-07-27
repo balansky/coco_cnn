@@ -3,13 +3,15 @@ import cv2
 import os
 from datetime import datetime
 # from cores import dataset
+import numpy as np
 import json
 
 class TfRecord(object):
 
-    def __init__(self, tfrecord_dir):
+    def __init__(self, tfrecord_dir, sup_cats=None):
         self.tfrecord_dir = tfrecord_dir
-        self.tf_categories = self._load_tf_categories()
+        self.sup_cats = sup_cats
+        self.tf_categories = self._load_tf_categories(sup_cats)
 
     def _int64_feature(self, value):
         if isinstance(value, list):
@@ -28,7 +30,7 @@ class TfRecord(object):
         with open(cat_path, 'w') as f:
             json.dump(json_cats, f)
 
-    def _load_tf_categories(self):
+    def _load_json_categories(self):
         categories = {}
         cat_path = os.path.join(self.tfrecord_dir, 'categories.json')
         if os.path.exists(cat_path):
@@ -36,15 +38,24 @@ class TfRecord(object):
                 categories = json.load(f)
         return categories
 
-    def get_tf_categories(self, sup_cats=None):
-        cats = []
+    def _load_tf_categories(self, sup_cats):
+        full_categories = self._load_json_categories()
+        tf_cats = []
         if sup_cats and isinstance(sup_cats, list):
             for cat in sup_cats:
-                if cat in self.tf_categories:
-                    cats.extend(self.tf_categories[cat])
+                if cat in full_categories:
+                    tf_cats.extend(full_categories[cat])
         elif sup_cats and isinstance(sup_cats, str):
-            cats.extend(self.tf_categories[sup_cats])
-        return cats
+            if sup_cats in full_categories:
+                tf_cats.extend(full_categories[sup_cats])
+        elif full_categories and not sup_cats:
+            for sub_cats in full_categories.values():
+                tf_cats.extend([cat for cat in sub_cats])
+        return tf_cats
+
+    def get_tf_categories(self):
+        return self.tf_categories
+
 
     def write_image_tfrecord(self, image_files, tf_type, tf_cat):
         tfrecord_path = os.path.join(self.tfrecord_dir, tf_type + "_" + tf_cat + ".tfrecords")
@@ -76,25 +87,23 @@ class TfRecord(object):
             "image_raw" : tf.FixedLenFeature([], tf.string),
             "image_height" : tf.FixedLenFeature([], tf.int64),
             "image_width" : tf.FixedLenFeature([], tf.int64),
-            "image_labels": tf.VarLenFeature(tf.string),
+            "image_labels": tf.VarLenFeature(tf.string)
             })
         return features
 
-    def get_tfrecords(self, tf_type, sup_cats):
+    def get_tfrecords(self, tf_type):
         records = []
         for record in os.listdir(self.tfrecord_dir):
             record_name, record_extension = record.split('.')
             if record_extension != 'tfrecords':
                 continue
             record_type, record_cat = record_name.split('_')
-            if record_type == tf_type and record_cat in sup_cats:
+            if record_type == tf_type and record_cat in self.sup_cats:
                 records.append(os.path.join(self.tfrecord_dir, record))
         return records
 
-    def decode_tfrecords(self, tf_type, sup_cats, num_epochs=1, capacity=60):
-        if not sup_cats:
-            sup_cats = [c for c in self.tf_categories.keys()]
-        tfrecord_files = self.get_tfrecords(tf_type, sup_cats)
+    def decode_tfrecords(self, tf_type, num_epochs=1, capacity=60):
+        tfrecord_files = self.get_tfrecords(tf_type)
         filename_queue = tf.train.string_input_producer(tfrecord_files, num_epochs=num_epochs,
                                                         shuffle=True, capacity=capacity)
         tf_example = self.read_image_tfrecord(filename_queue)

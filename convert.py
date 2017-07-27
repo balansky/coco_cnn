@@ -26,8 +26,8 @@ def save_image_categories(coco_root, tf_record, sup_cats):
 def main(coco_root, tf_dir, sup_cats):
     tf_record = tfrecord.TfRecord(tf_dir)
     convert_to_tfrecord(tf_record, coco_root, 'train', sup_cats)
-    convert_to_tfrecord(coco_root, tf_dir, 'val', sup_cats)
-    save_image_categories(coco_root, tf_dir, sup_cats)
+    # convert_to_tfrecord(coco_root, tf_dir, 'val', sup_cats)
+    # save_image_categories(coco_root, tf_dir, sup_cats)
 
 
 

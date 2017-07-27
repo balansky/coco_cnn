@@ -1,7 +1,7 @@
 import tensorflow as tf
 from pycocotools.coco import COCO
 import os
-from cores import dataset
+from cores import dataset, model
 from tensorflow.python.platform import gfile
 from PIL import Image
 from io import BytesIO
@@ -75,24 +75,24 @@ def serialize_images(images):
 
 
 def test_batch():
-    batch_size = 8
-    coco_tfrecord = dataset.CoCoTfRecord(tf, '/home/andy/Data/coco')
-    cats = coco_tfrecord.get_coco_cats('food')
+    batch_size = 1
+    trainer = model.MultiLabelTrainer('/home/andy/Data/coco/tfrecords', 'food')
     with tf.Session() as sess:
-        batch_images, batch_labels = coco_tfrecord.batch_data('train', batch_size)
-        idx_table = tf.contrib.lookup.index_table_from_tensor(
-                    mapping=cats, num_oov_buckets=1, default_value=-1)
+        batch_images, batch_labels = trainer.input_fn('train', batch_size, 10)
+        # idx_table = tf.contrib.lookup.index_table_from_tensor(
+        #             mapping=trainer.clf_classes, num_oov_buckets=1, default_value=-1)
         sess.run([tf.global_variables_initializer(), tf.local_variables_initializer(), tf.tables_initializer()])
         coord = tf.train.Coordinator()
         threads = tf.train.start_queue_runners(sess=sess, coord=coord)
-        labels_idx = idx_table.lookup(batch_labels)
-        labels = tf.cast(tf.sparse_to_indicator(labels_idx, 10), tf.float32)
+        # labels_idx = idx_table.lookup(batch_labels)
+        # labels = tf.cast(tf.sparse_to_indicator(labels_idx, 10), tf.float32)
         # label_tensor[labels_idx] = 1.0
         # rel_training_batch, rel_training_label = sess.run([batch_images, batch_labels])
         # str_training_label = tf.constant([label.decode('utf-8') for label in rel_training_label.values])
-        lb, lbidx = sess.run([labels, labels_idx])
+
+        _, lb = sess.run([batch_images, batch_labels])
         print(lb)
-        print(lbidx)
+        # print(lbidx)
         coord.request_stop()
         coord.join(threads)
 
