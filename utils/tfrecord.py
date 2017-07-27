@@ -57,26 +57,28 @@ class TfRecord(object):
         return self.tf_categories
 
 
-    def write_image_tfrecord(self, image_files, tf_type, tf_cat):
-        tfrecord_path = os.path.join(self.tfrecord_dir, tf_type + "_" + tf_cat + ".tfrecords")
-        writer = tf.python_io.TFRecordWriter(tfrecord_path)
-        for image_file in image_files:
-            print("[%s]Convertint Image(%s) to Tfrecord..." %
-                  (datetime.now().strftime('%Y-%m-%d %H:%M:%S'), image_file['path']))
-            try:
-                img = cv2.imread(image_file['path'])
-                raw_img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-                categories = image_file['category']
-                example = tf.train.Example(features=tf.train.Features(feature={
-                    'image_raw': self._bytes_feature(raw_img.tostring()),
-                    'image_height': self._int64_feature(raw_img.shape[0]),
-                    'image_width': self._int64_feature(raw_img.shape[1]),
-                    'image_labels': self._bytes_feature([cat.encode('utf-8') for cat in categories]),
-                }))
-                writer.write(example.SerializeToString())
-            except Exception as err:
-                print("Error Occur : " + str(err))
-        writer.close()
+    def write_image_tfrecord(self, image_files, tf_type, tf_cat, tf_size=2000):
+        image_file_chunks = [image_files[i:i+tf_size] for i in range(0, len(image_files), tf_size)]
+        for i, image_chk in enumerate(image_file_chunks):
+            tfrecord_path = os.path.join(self.tfrecord_dir, tf_type + "_" + tf_cat + "_%05d" % i + ".tfrecords")
+            writer = tf.python_io.TFRecordWriter(tfrecord_path)
+            for image_file in image_chk:
+                print("[%s]Convertint Image(%s) to Tfrecord..." %
+                      (datetime.now().strftime('%Y-%m-%d %H:%M:%S'), image_file['path']))
+                try:
+                    img = cv2.imread(image_file['path'])
+                    raw_img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+                    categories = image_file['category']
+                    example = tf.train.Example(features=tf.train.Features(feature={
+                        'image_raw': self._bytes_feature(raw_img.tostring()),
+                        'image_height': self._int64_feature(raw_img.shape[0]),
+                        'image_width': self._int64_feature(raw_img.shape[1]),
+                        'image_labels': self._bytes_feature([cat.encode('utf-8') for cat in categories]),
+                    }))
+                    writer.write(example.SerializeToString())
+                except Exception as err:
+                    print("Error Occur : " + str(err))
+            writer.close()
 
     def read_image_tfrecord(self, filename_queue):
         reader = tf.TFRecordReader()
@@ -97,7 +99,7 @@ class TfRecord(object):
             record_name, record_extension = record.split('.')
             if record_extension != 'tfrecords':
                 continue
-            record_type, record_cat = record_name.split('_')
+            record_type, record_cat, _ = record_name.split('_')
             if record_type == tf_type and record_cat in self.sup_cats:
                 records.append(os.path.join(self.tfrecord_dir, record))
         return records

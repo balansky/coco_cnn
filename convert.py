@@ -26,18 +26,18 @@ def save_image_categories(coco_root, tf_record, sup_cats):
 def main(coco_root, tf_dir, sup_cats):
     tf_record = tfrecord.TfRecord(tf_dir)
     convert_to_tfrecord(tf_record, coco_root, 'train', sup_cats)
-    # convert_to_tfrecord(coco_root, tf_dir, 'val', sup_cats)
-    # save_image_categories(coco_root, tf_dir, sup_cats)
+    convert_to_tfrecord(tf_record, coco_root, 'val', sup_cats)
+    save_image_categories(coco_root, tf_record,sup_cats)
 
 
 
 if __name__=="__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument('--coco_root',
+    parser.add_argument('--coco-root',
                         type=str,
                         default="/home/andy/Data/coco",
                         help='Coco Data Directory')
-    parser.add_argument('--tf_dir',
+    parser.add_argument('--tf-dir',
                         type=str,
                         default="/home/andy/Data/coco/tfrecords",
                         help='Tfrecord Directory')

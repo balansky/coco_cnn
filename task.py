@@ -16,13 +16,8 @@ class EvaluationRunHook(tf.train.SessionRunHook):
       eval_frequency (int): Frequency of evaluation every n train steps
       eval_steps (int): Evaluation steps to be performed
     """
-    def __init__(self,
-                 trainer,
-                 checkpoint_dir,
-                 eval_batch_size,
-                 eval_frequency,
-                 eval_steps=None,
-                 **kwargs):
+    def __init__(self, trainer, checkpoint_dir,eval_batch_size,
+                 eval_frequency, eval_steps=None, **kwargs):
 
         self._eval_steps = eval_steps
         self._checkpoint_dir = checkpoint_dir
@@ -34,13 +29,16 @@ class EvaluationRunHook(tf.train.SessionRunHook):
         # With the graph object as default graph
         # See https://www.tensorflow.org/api_docs/python/tf/Graph#as_default
         # Adds ops to the graph object
-        evaluation_graph = tf.Graph()
-        with evaluation_graph.as_default():
+        # evaluation_graph = tf.Graph()
+        with tf.Graph().as_default() as evaluation_graph:
+
             eval_inputs, eval_labels = trainer.input_fn('val', eval_batch_size, None)
             cross_entropy, correct_prediction = trainer.eval_fn(eval_inputs, eval_labels)
 
             # Op that creates a Summary protocol buffer by merging summaries
             self._summary_op = tf.summary.merge_all()
+
+            global_step = tf.contrib.framework.get_or_create_global_step()
 
             # Saver class add ops to save and restore
             # variables to and from checkpoint
@@ -48,7 +46,7 @@ class EvaluationRunHook(tf.train.SessionRunHook):
 
             # Creates a global step to contain a counter for
             # the global training step
-            self._gs = tf.contrib.framework.get_or_create_global_step()
+            self._gs = global_step
 
             self._loss_ops = cross_entropy
             self._eval_ops = correct_prediction
@@ -60,7 +58,7 @@ class EvaluationRunHook(tf.train.SessionRunHook):
         self._eval_lock = threading.Lock()
         self._checkpoint_lock = threading.Lock()
         self._file_writer = tf.summary.FileWriter(
-            os.path.join(checkpoint_dir, 'eval'), graph=evaluation_graph)
+            os.path.join(checkpoint_dir, 'eval'))
 
     def after_run(self, run_context, run_values):
         # Always check for new checkpoints in case a single evaluation
@@ -104,14 +102,15 @@ class EvaluationRunHook(tf.train.SessionRunHook):
 
             session.run([
                 tf.tables_initializer(),
-                tf.local_variables_initializer()
+                tf.local_variables_initializer(),
+                # tf.global_variables_initializer()
             ])
             tf.train.start_queue_runners(coord=coord, sess=session)
             train_step = session.run(self._gs)
 
             tf.logging.info('Starting Evaluation For Step: {}'.format(train_step))
-            eval_loss = 0
-            eval_acc = 0
+            total_loss = 0
+            total_acc = 0
             with coord.stop_on_exception():
                 eval_step = 0
                 while not coord.should_stop() and (self._eval_steps is None or
@@ -121,10 +120,10 @@ class EvaluationRunHook(tf.train.SessionRunHook):
                     if eval_step % 100 == 0:
                         tf.logging.info("On Evaluation Step: {}".format(eval_step))
                     eval_step += 1
-                    eval_loss += eval_loss
-                    eval_acc += eval_acc
-            tf.logging.info("Average Loss : %s" % str(eval_loss/eval_step))
-            tf.logging.info("Average Accuracy : %s" % str(eval_acc/eval_step))
+                    total_loss += eval_loss
+                    total_acc += eval_accuracy
+            tf.logging.info("Average Loss : %s" % str(total_loss/eval_step))
+            tf.logging.info("Average Accuracy : %s" % str(total_acc/eval_step))
             # Write the summaries
             self._file_writer.add_summary(summaries, global_step=train_step)
             self._file_writer.flush()
@@ -137,19 +136,24 @@ def run(target, cluster_spec, is_chief, job_dir, data_dir, sup_cats,
         learning_rate, decay_frequency, decay_rate, num_epochs, num_threads):
 
     trainer = model.MultiLabelTrainer(data_dir, sup_cats)
+    # global_step = tf.contrib.framework.get_or_create_global_step()
     if is_chief:
-        hooks = [EvaluationRunHook(trainer, job_dir, eval_batch_size, eval_frequency, eval_steps=eval_steps,
-        )]
+        # evaluation_graph = tf.Graph()
+        # with evaluation_graph.as_default():
+
+        hooks = [EvaluationRunHook(trainer, job_dir,eval_batch_size,
+                                   eval_frequency, eval_steps=eval_steps)]
     else:
         hooks = []
     with tf.Graph().as_default():
         with tf.device(tf.train.replica_device_setter(cluster=cluster_spec)):
             batch_inputs, batch_labels = trainer.input_fn('train', train_batch_size, num_epochs, num_threads)
-            train_op, global_step = trainer.train_fn(batch_inputs, batch_labels, learning_rate, decay_frequency,
-                                                     decay_rate)
+
+            train_op, global_step = trainer.train_fn(batch_inputs, batch_labels, learning_rate, decay_frequency, decay_rate)
         with tf.train.MonitoredTrainingSession(master=target, is_chief=is_chief, checkpoint_dir=job_dir,
-                                               hooks=hooks, save_checkpoint_secs=20,
+                                               hooks=hooks, save_checkpoint_secs=60,
                                                save_summaries_steps=50) as session:
+            # session.run(tf.global_variables_initializer())
             step = global_step.eval(session=session)
             while (train_steps is None or
                            step < train_steps) and not session.should_stop():
@@ -265,7 +269,9 @@ if __name__ == "__main__":
                         help='Learning rate for SGD')
     parser.add_argument('--eval-frequency',
                         default=100,
-                        help='Perform one evaluation per n steps')
+                        help='Perform one evaluation per n steps',
+                        type=int
+                        )
     parser.add_argument('--decay-rate',
                         type=float,
                         default=0.96,
@@ -274,6 +280,7 @@ if __name__ == "__main__":
                         """)
     parser.add_argument('--decay-frequency',
                         default=100,
+                        type=int,
                         help='Perform decay per n steps')
     parser.add_argument('--num-epochs',
                         type=int,

@@ -2,7 +2,7 @@ from inception import inception_model
 import tensorflow as tf
 from utils import tfrecord
 from tensorflow.python.ops import control_flow_ops
-
+from tensorflow.contrib.slim import nets
 
 TRAIN, EVAL, PREDICT = 'TRAIN', 'EVAL', 'PREDICT'
 CNN_IMAGE_SIZE = 299
@@ -67,7 +67,8 @@ class MultiLabelTrainer(Inception):
 
 
     def _cross_entropy(self, batch_images, batch_labels, for_training=False):
-        logits, end_points = inception_model.inference(batch_images, self.cls_num, for_training=for_training)
+        # logits, end_points = inception_model.inference(batch_images, self.cls_num, for_training=for_training)
+        logits, end_points = nets.inception.inception_v3(batch_images, self.cls_num, is_training=for_training, dropout_keep_prob=0.5)
         cross_entropy = tf.nn.sigmoid_cross_entropy_with_logits(logits=logits, labels=batch_labels)
         total_loss = tf.reduce_mean(cross_entropy)
         return total_loss, logits
@@ -87,11 +88,12 @@ class MultiLabelTrainer(Inception):
         labels = tf.cast(tf.sparse_to_indicator(labels_idx, self.cls_num), tf.float32)
         return batch_images, labels
 
+
     def train_fn(self, batch_images, batch_labels, learning_rate, decay_frequency=3000, decay_rate=0.96):
         global_step = tf.contrib.framework.get_or_create_global_step()
         total_loss, _ = self._cross_entropy(batch_images, batch_labels, True)
         lr = tf.train.exponential_decay(learning_rate, global_step, decay_frequency, decay_rate, staircase=True)
-        train_op = tf.train.AdamOptimizer(lr).minimize(total_loss, global_step=global_step)
+        train_op = tf.train.GradientDescentOptimizer(lr).minimize(total_loss, global_step=global_step)
         return train_op, global_step
 
     def eval_fn(self, batch_images, batch_labels):
@@ -106,7 +108,7 @@ class MultiLabelTrainer(Inception):
 
     def inference(self, incoming_data, tops=10):
         inputs = self._parse_incoming_data(incoming_data)
-        logits, end_points = inception_model.inference(inputs, self.cls_num, for_training=False)
+        logits, end_points = inception_model.inference(inputs, self.cls_num, False)
         sigmoid_tensor = tf.nn.sigmoid(logits, name='sigmoid_tensor')
         class_tensor = tf.constant(self.clf_classes)
         table = tf.contrib.lookup.index_to_string_table_from_tensor(class_tensor)
