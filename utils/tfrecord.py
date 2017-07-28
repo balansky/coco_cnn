@@ -5,11 +5,14 @@ from datetime import datetime
 # from cores import dataset
 import numpy as np
 import json
+from google.cloud import storage
+
 
 class TfRecord(object):
 
-    def __init__(self, tfrecord_dir, sup_cats=None):
+    def __init__(self, tfrecord_dir, config_dir, sup_cats=None):
         self.tfrecord_dir = tfrecord_dir
+        self.config_dir = config_dir
         self.sup_cats = sup_cats
         self.tf_categories = self._load_tf_categories(sup_cats)
 
@@ -26,13 +29,19 @@ class TfRecord(object):
             return tf.train.Feature(bytes_list=tf.train.BytesList(value=[value]))
 
     def save_tf_categories(self, json_cats):
-        cat_path = os.path.join(self.tfrecord_dir, 'categories.json')
+        cat_path = os.path.join(self.config_dir, 'categories.json')
         with open(cat_path, 'w') as f:
             json.dump(json_cats, f)
 
+
+    def save_tf_info(self, tf_info):
+        tf_info_path = os.path.join(self.config_dir, "tfrecord.json")
+        with open(tf_info_path, 'w') as f:
+            json.dump(tf_info, f)
+
     def _load_json_categories(self):
         categories = {}
-        cat_path = os.path.join(self.tfrecord_dir, 'categories.json')
+        cat_path = os.path.join(self.config_dir, 'categories.json')
         if os.path.exists(cat_path):
             with open(cat_path, 'r') as f:
                 categories = json.load(f)
@@ -58,9 +67,11 @@ class TfRecord(object):
 
 
     def write_image_tfrecord(self, image_files, tf_type, tf_cat, tf_size=2000):
+        tfrecords = []
         image_file_chunks = [image_files[i:i+tf_size] for i in range(0, len(image_files), tf_size)]
         for i, image_chk in enumerate(image_file_chunks):
-            tfrecord_path = os.path.join(self.tfrecord_dir, tf_type + "_" + tf_cat + "_%05d" % i + ".tfrecords")
+            tfrecord_filename = tf_type + "_" + tf_cat + "_%05d" % i + ".tfrecords"
+            tfrecord_path = os.path.join(self.tfrecord_dir, tfrecord_filename)
             writer = tf.python_io.TFRecordWriter(tfrecord_path)
             for image_file in image_chk:
                 print("[%s]Convertint Image(%s) to Tfrecord..." %
@@ -76,9 +87,11 @@ class TfRecord(object):
                         'image_labels': self._bytes_feature([cat.encode('utf-8') for cat in categories]),
                     }))
                     writer.write(example.SerializeToString())
+                    tfrecords.append(tfrecord_filename)
                 except Exception as err:
                     print("Error Occur : " + str(err))
             writer.close()
+        return tfrecords
 
     def read_image_tfrecord(self, filename_queue):
         reader = tf.TFRecordReader()
@@ -104,8 +117,21 @@ class TfRecord(object):
                 records.append(os.path.join(self.tfrecord_dir, record))
         return records
 
+    def get_gs_tfrecords(self, tf_type):
+        tf_files=[]
+        info_path = os.path.join(self.config_dir, 'tfrecord.json')
+        if os.path.exists(info_path):
+            with open(info_path, 'r') as f:
+                tf_info = json.load(f)
+                if tf_type in tf_info:
+                    tf_files = [self.tfrecord_dir + "/" + tf_file for tf_file in tf_info[tf_type]]
+        return tf_files
+
     def decode_tfrecords(self, tf_type, num_epochs=1, capacity=60):
-        tfrecord_files = self.get_tfrecords(tf_type)
+        if self.tfrecord_dir.split(':')[0] == "gs":
+            tfrecord_files = self.get_gs_tfrecords(tf_type)
+        else:
+            tfrecord_files = self.get_tfrecords(tf_type)
         filename_queue = tf.train.string_input_producer(tfrecord_files, num_epochs=num_epochs,
                                                         shuffle=True, capacity=capacity)
         tf_example = self.read_image_tfrecord(filename_queue)

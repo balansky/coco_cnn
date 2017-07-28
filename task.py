@@ -131,17 +131,13 @@ class EvaluationRunHook(tf.train.SessionRunHook):
 
 
 
-def run(target, cluster_spec, is_chief, job_dir, data_dir, sup_cats,
+def run(target, cluster_spec, is_chief, job_dir, data_dir, config_dir, sup_cats,
         train_steps, train_batch_size, eval_steps,eval_batch_size, eval_frequency,
         learning_rate, decay_frequency, decay_rate, num_epochs, num_threads):
 
-    trainer = model.MultiLabelTrainer(data_dir, sup_cats)
-    # global_step = tf.contrib.framework.get_or_create_global_step()
+    trainer = model.MultiLabelTrainer(data_dir, config_dir, sup_cats)
     if is_chief:
-        # evaluation_graph = tf.Graph()
-        # with evaluation_graph.as_default():
-
-        hooks = [EvaluationRunHook(trainer, job_dir,eval_batch_size,
+        hooks = [EvaluationRunHook(trainer, job_dir, eval_batch_size,
                                    eval_frequency, eval_steps=eval_steps)]
     else:
         hooks = []
@@ -153,7 +149,6 @@ def run(target, cluster_spec, is_chief, job_dir, data_dir, sup_cats,
         with tf.train.MonitoredTrainingSession(master=target, is_chief=is_chief, checkpoint_dir=job_dir,
                                                hooks=hooks, save_checkpoint_secs=60,
                                                save_summaries_steps=50) as session:
-            # session.run(tf.global_variables_initializer())
             step = global_step.eval(session=session)
             while (train_steps is None or
                            step < train_steps) and not session.should_stop():
@@ -231,13 +226,20 @@ def dispatch(*args, **kwargs):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument('--data-dir',
-                        required=True,
+                        default='gs://lace-data/tfrecords',
                         type=str,
                         help='Local Tfrecord Data')
     parser.add_argument('--sup-cats',
                         default=None,
                         type=str,
                         help='Evaluation files local or GCS', nargs='+')
+    parser.add_argument('--config-dir',
+                        required=True,
+                        type=str,
+                        help="""\
+                        GCS or local dir for checkpoints, exports, and
+                        summaries. Use an existing directory to load a
+                        trained model, or a new directory to retrain""")
     parser.add_argument('--job-dir',
                         required=True,
                         type=str,

@@ -23,11 +23,13 @@ def save_image_categories(coco_root, tf_record, sup_cats):
     tf_record.save_tf_categories(cat_dict)
 
 
-def main(coco_root, tf_dir, sup_cats):
-    tf_record = tfrecord.TfRecord(tf_dir)
-    convert_to_tfrecord(tf_record, coco_root, 'train', sup_cats)
-    convert_to_tfrecord(tf_record, coco_root, 'val', sup_cats)
-    save_image_categories(coco_root, tf_record,sup_cats)
+def main(coco_root, tf_dir, config_dir, sup_cats):
+    tf_record = tfrecord.TfRecord(tf_dir, config_dir)
+    train_files = convert_to_tfrecord(tf_record, coco_root, 'train', sup_cats)
+    val_files = convert_to_tfrecord(tf_record, coco_root, 'val', sup_cats)
+    save_image_categories(coco_root, tf_record, sup_cats)
+    tf_info = {'train': train_files, 'val': val_files}
+    tf_record.save_tf_info(tf_info)
 
 
 
@@ -40,6 +42,10 @@ if __name__=="__main__":
     parser.add_argument('--tf-dir',
                         type=str,
                         default="/home/andy/Data/coco/tfrecords",
+                        help='Tfrecord Directory')
+    parser.add_argument('--config-dir',
+                        type=str,
+                        default="configs",
                         help='Tfrecord Directory')
     parser.add_argument('--sup-cats',
                         default=None,

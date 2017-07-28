@@ -60,8 +60,8 @@ class Inception(object):
 
 class MultiLabelTrainer(Inception):
 
-    def __init__(self, tf_dir, sup_cats=None):
-        self.tf_record = tfrecord.TfRecord(tf_dir, sup_cats)
+    def __init__(self, tf_dir, config_dir, sup_cats=None):
+        self.tf_record = tfrecord.TfRecord(tf_dir, config_dir, sup_cats)
         tf_classes = self.tf_record.get_tf_categories()
         super(MultiLabelTrainer, self).__init__(tf_classes)
 

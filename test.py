@@ -231,12 +231,17 @@ def export_incept3():
             print('Successfully exported model to %s' % output_dir)
 
 
+def test_gc_tfrecord():
+    from utils import tfrecord
+    gc_tfrecord = tfrecord.GcloudTfrecord("/home/andy/Data/coco/tfrecords", 'ss', sup_cats='food')
+    gc_tfrecord.get_tfrecords('train')
 
 
 
 def main():
     # export_incept3()
-    test_batch()
+    test_gc_tfrecord()
+    # test_batch()
     # coco_tfrecord = dataset.CoCoTfRecord(tf, '/home/andy/Data/coco')
     # coco_tfrecord.write_to_tfrecords('food', 'train')
     # image_dir = os.path.join('/home/andy/Data/coco', 'train')
