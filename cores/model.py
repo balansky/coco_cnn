@@ -68,7 +68,8 @@ class MultiLabelTrainer(Inception):
 
     def _cross_entropy(self, batch_images, batch_labels, for_training=False):
         # logits, end_points = inception_model.inference(batch_images, self.cls_num, for_training=for_training)
-        logits, end_points = nets.inception.inception_v3(batch_images, self.cls_num, is_training=for_training, dropout_keep_prob=0.5)
+        logits, end_points = nets.inception.inception_v3(batch_images, self.cls_num, is_training=for_training,
+                                                         dropout_keep_prob=0.5)
         cross_entropy = tf.nn.sigmoid_cross_entropy_with_logits(logits=logits, labels=batch_labels)
         total_loss = tf.reduce_mean(cross_entropy)
         return total_loss, logits

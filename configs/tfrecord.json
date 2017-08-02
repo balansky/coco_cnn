@@ -1,1 +1,1 @@
-{"train": null, "val": null}
+{"val": {"food": ["val_food_00001.tfrecords", "val_food_00000.tfrecords", "val_food_00002.tfrecords"]}, "train": {"food": ["train_food_00005.tfrecords", "train_food_00001.tfrecords", "train_food_00002.tfrecords", "train_food_00004.tfrecords", "train_food_00003.tfrecords", "train_food_00000.tfrecords"]}}

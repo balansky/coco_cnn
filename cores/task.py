@@ -1,4 +1,4 @@
-from cores import model
+import model
 import tensorflow as tf
 import os
 import json
@@ -226,7 +226,7 @@ def dispatch(*args, **kwargs):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument('--data-dir',
-                        default='gs://lace-data/tfrecords',
+                        default='gs://coco-175522/tfrecords',
                         type=str,
                         help='Local Tfrecord Data')
     parser.add_argument('--sup-cats',
@@ -234,14 +234,14 @@ if __name__ == "__main__":
                         type=str,
                         help='Evaluation files local or GCS', nargs='+')
     parser.add_argument('--config-dir',
-                        required=True,
+                        default="configs",
                         type=str,
                         help="""\
                         GCS or local dir for checkpoints, exports, and
                         summaries. Use an existing directory to load a
                         trained model, or a new directory to retrain""")
     parser.add_argument('--job-dir',
-                        required=True,
+                        default="gs://coco-175522/outputs",
                         type=str,
                         help="""\
                         GCS or local dir for checkpoints, exports, and

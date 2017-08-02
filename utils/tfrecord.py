@@ -28,27 +28,30 @@ class TfRecord(object):
         else:
             return tf.train.Feature(bytes_list=tf.train.BytesList(value=[value]))
 
+    def _save_json(self, json_data, save_path):
+        with open(save_path, 'w') as f:
+            json.dump(json_data, f)
+
+    def _load_json(self, json_path):
+        json_dict = {}
+        if os.path.exists(json_path):
+            with open(json_path, 'r') as f:
+                json_dict = json.load(f)
+        return json_dict
+
     def save_tf_categories(self, json_cats):
         cat_path = os.path.join(self.config_dir, 'categories.json')
-        with open(cat_path, 'w') as f:
-            json.dump(json_cats, f)
+        self._save_json(json_cats, cat_path)
 
 
     def save_tf_info(self, tf_info):
         tf_info_path = os.path.join(self.config_dir, "tfrecord.json")
-        with open(tf_info_path, 'w') as f:
-            json.dump(tf_info, f)
+        self._save_json(tf_info, tf_info_path)
 
-    def _load_json_categories(self):
-        categories = {}
-        cat_path = os.path.join(self.config_dir, 'categories.json')
-        if os.path.exists(cat_path):
-            with open(cat_path, 'r') as f:
-                categories = json.load(f)
-        return categories
 
     def _load_tf_categories(self, sup_cats):
-        full_categories = self._load_json_categories()
+        cat_path = os.path.join(self.config_dir, 'categories.json')
+        full_categories = self._load_json(cat_path)
         tf_cats = []
         if sup_cats and isinstance(sup_cats, list):
             for cat in sup_cats:
@@ -64,6 +67,29 @@ class TfRecord(object):
 
     def get_tf_categories(self):
         return self.tf_categories
+
+    # def get_tfrecords(self, tf_type):
+    #     records = []
+    #     for record in os.listdir(self.tfrecord_dir):
+    #         record_name, record_extension = record.split('.')
+    #         if record_extension != 'tfrecords':
+    #             continue
+    #         record_type, record_cat, _ = record_name.split('_')
+    #         if record_type == tf_type and record_cat in self.sup_cats:
+    #             records.append(os.path.join(self.tfrecord_dir, record))
+    #     return records
+
+    def get_tfrecords(self, tf_type):
+        tf_files = []
+        info_path = os.path.join(self.config_dir, 'tfrecord.json')
+        tf_info = self._load_json(info_path)
+        tf_data_set = tf_info[tf_type]
+        for tf_cat, tf_data in tf_data_set.items():
+            if self.sup_cats and tf_cat in self.sup_cats:
+                tf_files.extend([self.tfrecord_dir + "/" + tf_file for tf_file in tf_data])
+            elif not self.sup_cats:
+                tf_files.extend([self.tfrecord_dir + "/" + tf_file for tf_file in tf_data])
+        return tf_files
 
 
     def write_image_tfrecord(self, image_files, tf_type, tf_cat, tf_size=2000):
@@ -106,32 +132,13 @@ class TfRecord(object):
             })
         return features
 
-    def get_tfrecords(self, tf_type):
-        records = []
-        for record in os.listdir(self.tfrecord_dir):
-            record_name, record_extension = record.split('.')
-            if record_extension != 'tfrecords':
-                continue
-            record_type, record_cat, _ = record_name.split('_')
-            if record_type == tf_type and record_cat in self.sup_cats:
-                records.append(os.path.join(self.tfrecord_dir, record))
-        return records
 
-    def get_gs_tfrecords(self, tf_type):
-        tf_files=[]
-        info_path = os.path.join(self.config_dir, 'tfrecord.json')
-        if os.path.exists(info_path):
-            with open(info_path, 'r') as f:
-                tf_info = json.load(f)
-                if tf_type in tf_info:
-                    tf_files = [self.tfrecord_dir + "/" + tf_file for tf_file in tf_info[tf_type]]
-        return tf_files
 
     def decode_tfrecords(self, tf_type, num_epochs=1, capacity=60):
-        if self.tfrecord_dir.split(':')[0] == "gs":
-            tfrecord_files = self.get_gs_tfrecords(tf_type)
-        else:
-            tfrecord_files = self.get_tfrecords(tf_type)
+        # if self.tfrecord_dir.split(':')[0] == "gs":
+        #     tfrecord_files = self.get_gs_tfrecords(tf_type)
+        # else:
+        tfrecord_files = self.get_tfrecords(tf_type)
         filename_queue = tf.train.string_input_producer(tfrecord_files, num_epochs=num_epochs,
                                                         shuffle=True, capacity=capacity)
         tf_example = self.read_image_tfrecord(filename_queue)
