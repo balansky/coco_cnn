@@ -1,4 +1,4 @@
-from inception import inception_model
+# from inception import inception_model
 import tensorflow as tf
 from utils import tfrecord
 from tensorflow.python.ops import control_flow_ops
@@ -105,11 +105,12 @@ class MultiLabelTrainer(Inception):
         correct_prediction = tf.equal(tf.round(sigmoid_tensor), batch_labels)
         evaluation_step = tf.reduce_mean(tf.cast(correct_prediction, tf.float32))
         tf.summary.scalar('accuracy', evaluation_step)
-        return total_loss, evaluation_step
+        return total_loss, evaluation_step.incep
 
     def inference(self, incoming_data, tops=10):
         inputs = self._parse_incoming_data(incoming_data)
-        logits, end_points = inception_model.inference(inputs, self.cls_num, False)
+        # logits, end_points = inception_model.inference(inputs, self.cls_num, False)
+        logits, end_points = nets.inception.inception_v3(inputs, self.cls_num, False)
         sigmoid_tensor = tf.nn.sigmoid(logits, name='sigmoid_tensor')
         class_tensor = tf.constant(self.clf_classes)
         table = tf.contrib.lookup.index_to_string_table_from_tensor(class_tensor)

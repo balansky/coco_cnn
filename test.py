@@ -1,11 +1,10 @@
-import tensorflow as tf
-from pycocotools.coco import COCO
 import os
-from cores import dataset, model
-from tensorflow.python.platform import gfile
-from PIL import Image
-from io import BytesIO
-import numpy as np
+
+import tensorflow as tf
+
+from cores import model
+from pycocotools.coco import COCO
+
 # from tensorflow.contrib.slim.python.slim.nets import inception_v3 as inception
 # from tensorflow.contrib import slim
 from inception import inception_model

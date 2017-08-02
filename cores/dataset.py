@@ -1,7 +1,4 @@
 from pycocotools.coco import COCO
-from datetime import datetime
-import tensorflow as tf
-import cv2
 import os
 
 class CoCoSet(object):

@@ -1,10 +1,18 @@
-import model
-import tensorflow as tf
-import os
-import json
 import argparse
-from tensorflow.python.saved_model import signature_constants as sig_constants
+import json
+
 import threading
+
+import tensorflow as tf
+from tensorflow.python.saved_model import signature_constants as sig_constants
+import os
+
+from cores import model
+# import sys
+# import os
+
+# dir_path = os.path.dirname(os.path.realpath(__file__))
+# sys.path.append(dir_path)
 
 
 class EvaluationRunHook(tf.train.SessionRunHook):
@@ -16,7 +24,7 @@ class EvaluationRunHook(tf.train.SessionRunHook):
       eval_frequency (int): Frequency of evaluation every n train steps
       eval_steps (int): Evaluation steps to be performed
     """
-    def __init__(self, trainer, checkpoint_dir,eval_batch_size,
+    def __init__(self, trainer, checkpoint_dir, eval_batch_size,
                  eval_frequency, eval_steps=None, **kwargs):
 
         self._eval_steps = eval_steps
