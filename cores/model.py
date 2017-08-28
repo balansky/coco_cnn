@@ -3,6 +3,9 @@ import tensorflow as tf
 from utils import tfrecord
 from tensorflow.python.ops import control_flow_ops
 from tensorflow.contrib.slim import nets
+from tensorflow.contrib.keras import losses
+
+
 
 TRAIN, EVAL, PREDICT = 'TRAIN', 'EVAL', 'PREDICT'
 CNN_IMAGE_SIZE = 299
@@ -70,7 +73,9 @@ class MultiLabelTrainer(Inception):
         # logits, end_points = inception_model.inference(batch_images, self.cls_num, for_training=for_training)
         logits, end_points = nets.inception.inception_v3(batch_images, self.cls_num, is_training=for_training,
                                                          dropout_keep_prob=0.5)
-        cross_entropy = tf.nn.sigmoid_cross_entropy_with_logits(logits=logits, labels=batch_labels)
+        # cross_entropy = tf.nn.sigmoid_cross_entropy_with_logits(logits=logits, labels=batch_labels)
+        cross_entropy = tf.nn.weighted_cross_entropy_with_logits(targets=batch_labels, logits=logits,
+                                                                 pos_weight=self.cls_num/2)
         total_loss = tf.reduce_mean(cross_entropy)
         return total_loss, logits
 
@@ -94,8 +99,9 @@ class MultiLabelTrainer(Inception):
         global_step = tf.contrib.framework.get_or_create_global_step()
         total_loss, _ = self._cross_entropy(batch_images, batch_labels, True)
         lr = tf.train.exponential_decay(learning_rate, global_step, decay_frequency, decay_rate, staircase=True)
-        train_op = tf.train.GradientDescentOptimizer(lr).minimize(total_loss, global_step=global_step)
+        train_op = tf.train.AdamOptimizer(lr).minimize(total_loss, global_step=global_step)
         return train_op, global_step
+
 
     def eval_fn(self, batch_images, batch_labels):
         total_loss, logits = self._cross_entropy(batch_images, batch_labels, False)
@@ -103,9 +109,9 @@ class MultiLabelTrainer(Inception):
         sigmoid_tensor = tf.nn.sigmoid(logits, name='sigmoid_tensor')
         tf.summary.histogram('activations', sigmoid_tensor)
         correct_prediction = tf.equal(tf.round(sigmoid_tensor), batch_labels)
-        evaluation_step = tf.reduce_mean(tf.cast(correct_prediction, tf.float32))
-        tf.summary.scalar('accuracy', evaluation_step)
-        return total_loss, evaluation_step.incep
+        evaluation_acc = tf.reduce_mean(tf.cast(correct_prediction, tf.float32))
+        tf.summary.scalar('accuracy', evaluation_acc)
+        return total_loss, evaluation_acc
 
     def inference(self, incoming_data, tops=10):
         inputs = self._parse_incoming_data(incoming_data)

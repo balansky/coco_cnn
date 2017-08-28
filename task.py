@@ -154,6 +154,7 @@ def run(target, cluster_spec, is_chief, job_dir, data_dir, config_dir, sup_cats,
             batch_inputs, batch_labels = trainer.input_fn('train', train_batch_size, num_epochs, num_threads)
 
             train_op, global_step = trainer.train_fn(batch_inputs, batch_labels, learning_rate, decay_frequency, decay_rate)
+
         with tf.train.MonitoredTrainingSession(master=target, is_chief=is_chief, checkpoint_dir=job_dir,
                                                hooks=hooks, save_checkpoint_secs=60,
                                                save_summaries_steps=50) as session:
@@ -255,6 +256,7 @@ if __name__ == "__main__":
                         GCS or local dir for checkpoints, exports, and
                         summaries. Use an existing directory to load a
                         trained model, or a new directory to retrain""")
+
     parser.add_argument('--train-steps',
                         type=int,
                         help='Maximum number of training steps to perform.')
